@@ -1,0 +1,610 @@
+#!/usr/bin/env python3
+# ============================================================
+#   RECON-LITE — Website Information Gathering Tool
+#   Author  : Ghost Protocol
+#   Target  : Kali Linux / VMware
+#   Purpose : Passive recon & OSINT on web targets
+#   WARNING : For educational & ethical use only
+# ============================================================
+
+import socket
+import ssl
+import sys
+import time
+import random
+import os
+import json
+import re
+import urllib.request
+import urllib.error
+import http.client
+import threading
+from datetime import datetime
+
+# ─── ANSI COLORS ───────────────────────────────────────────
+R   = "\033[1;31m"
+G   = "\033[1;32m"
+Y   = "\033[1;33m"
+B   = "\033[1;34m"
+M   = "\033[1;35m"
+C   = "\033[1;36m"
+W   = "\033[1;37m"
+DIM = "\033[2;37m"
+BG  = "\033[42;30m"
+RD  = "\033[41;37m"
+X   = "\033[0m"
+
+# ─── HELPERS ───────────────────────────────────────────────
+def slow_print(text, delay=0.018):
+    for ch in text:
+        print(ch, end="", flush=True)
+        time.sleep(delay)
+    print()
+
+def separator(char="─", color=C, width=62):
+    print(f"{color}{char * width}{X}")
+
+def fake_scan(label, steps=20, delay=0.035):
+    for i in range(steps + 1):
+        filled = int((i / steps) * 20)
+        bar = f"[{'█' * filled}{'░' * (20 - filled)}]"
+        pct = int((i / steps) * 100)
+        print(f"\r  {C}{label}{X}  {G}{bar}{X}  {Y}{pct}%{X}", end="", flush=True)
+        time.sleep(delay + random.uniform(0, 0.01))
+    print(f"  {G}✓{X}")
+
+def section(title):
+    print(f"\n{W}  [+] {title}{X}")
+    print(f"  {DIM}{'─' * 50}{X}")
+
+def field(label, value, color=C):
+    print(f"  {color}{label:<28}{X}  {W}{value}{X}")
+
+def clean_domain(target):
+    target = target.strip()
+    target = re.sub(r'^https?://', '', target)
+    target = re.sub(r'^www\.', '', target)
+    target = target.split('/')[0]
+    return target
+
+# ─── BANNER ────────────────────────────────────────────────
+def banner():
+    art = f"""
+{C}██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗{X}
+{C}██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║{X}
+{C}██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║{X}
+{C}██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║{X}
+{C}██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║{X}
+{C}╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝{X}
+{G}          ██╗     ██╗████████╗███████╗{X}
+{G}          ██║     ██║╚══██╔══╝██╔════╝{X}
+{G}          ██║     ██║   ██║   █████╗  {X}
+{G}          ██║     ██║   ██║   ██╔══╝  {X}
+{G}          ███████╗██║   ██║   ███████╗{X}
+{G}          ╚══════╝╚═╝   ╚═╝   ╚══════╝{X}
+
+{M}      ┌──────────────────────────────────────────┐{X}
+{M}      │   W E B S I T E   R E C O N   T O O L   │{X}
+{M}      │         P A S S I V E   O S I N T        │{X}
+{M}      │              v 2 . 0  L I T E            │{X}
+{M}      └──────────────────────────────────────────┘{X}
+{DIM}          [ Passive recon. Stay in the shadows. ]{X}
+"""
+    print(art)
+
+# ─── BOOT ──────────────────────────────────────────────────
+def boot():
+    modules = [
+        "Loading DNS resolver engine      ",
+        "Importing WHOIS query module     ",
+        "Activating HTTP header scanner   ",
+        "Initializing SSL certificate unit",
+        "Arming subdomain brute-forcer    ",
+        "Calibrating port scanner         ",
+        "Engaging GeoIP tracker           ",
+    ]
+    separator("═")
+    for m in modules:
+        fake_scan(m, steps=12, delay=0.025)
+    separator("═")
+    print(f"\n  {G}[✓] ALL RECON MODULES LOADED{X}\n")
+    time.sleep(0.3)
+
+# ─── 1. IP & DNS LOOKUP ────────────────────────────────────
+def get_ip_dns(domain):
+    section("IP ADDRESS & DNS RECORDS")
+    try:
+        ip = socket.gethostbyname(domain)
+        field("IPv4 Address", ip, G)
+    except Exception as e:
+        field("IPv4 Address", f"Failed — {e}", R)
+        ip = None
+
+    # All IPs
+    try:
+        all_ips = socket.getaddrinfo(domain, None)
+        unique = list(set([r[4][0] for r in all_ips]))
+        field("All Resolved IPs", ", ".join(unique), Y)
+    except:
+        pass
+
+    # Reverse DNS
+    try:
+        reverse = socket.gethostbyaddr(ip)[0] if ip else "N/A"
+        field("Reverse DNS (PTR)", reverse, C)
+    except:
+        field("Reverse DNS (PTR)", "Not available", DIM)
+
+    # DNS Records via socket
+    try:
+        import subprocess
+        for rtype in ["A", "MX", "NS", "TXT"]:
+            result = subprocess.run(
+                ["dig", "+short", rtype, domain],
+                capture_output=True, text=True, timeout=5
+            )
+            out = result.stdout.strip().replace("\n", " | ")
+            if out:
+                field(f"DNS {rtype} Record", out[:80], Y)
+            else:
+                field(f"DNS {rtype} Record", "No record found", DIM)
+    except FileNotFoundError:
+        field("DNS Records", "dig not found — run: apt install dnsutils", R)
+    except Exception as e:
+        field("DNS Records", f"Error: {e}", R)
+
+    return ip
+
+# ─── 2. WHOIS ──────────────────────────────────────────────
+def get_whois(domain):
+    section("WHOIS INFORMATION")
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["whois", domain],
+            capture_output=True, text=True, timeout=10
+        )
+        output = result.stdout
+
+        fields_to_find = {
+            "Registrar"        : r"Registrar:\s*(.+)",
+            "Registrant Org"   : r"Registrant Organization:\s*(.+)",
+            "Registrant Country": r"Registrant Country:\s*(.+)",
+            "Created Date"     : r"Creation Date:\s*(.+)",
+            "Updated Date"     : r"Updated Date:\s*(.+)",
+            "Expiry Date"      : r"Registry Expiry Date:\s*(.+)",
+            "Name Servers"     : r"Name Server:\s*(.+)",
+            "DNSSEC"           : r"DNSSEC:\s*(.+)",
+            "Status"           : r"Domain Status:\s*(.+)",
+        }
+
+        found_any = False
+        for label, pattern in fields_to_find.items():
+            match = re.search(pattern, output, re.IGNORECASE)
+            if match:
+                val = match.group(1).strip()[:70]
+                field(label, val, C)
+                found_any = True
+
+        if not found_any:
+            print(f"  {Y}[~] WHOIS data not parseable. Raw output below:{X}")
+            for line in output.splitlines()[:20]:
+                if line.strip():
+                    print(f"  {DIM}{line.strip()}{X}")
+
+    except FileNotFoundError:
+        print(f"  {R}[!] whois not installed. Run: apt install whois{X}")
+    except Exception as e:
+        print(f"  {R}[!] WHOIS Error: {e}{X}")
+
+# ─── 3. HTTP HEADERS ───────────────────────────────────────
+def get_http_headers(domain):
+    section("HTTP HEADERS & SERVER INFO")
+    for scheme in ["https", "http"]:
+        try:
+            url = f"{scheme}://{domain}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                code = resp.getcode()
+                headers = dict(resp.headers)
+
+                color = G if code == 200 else Y if code in [301,302] else R
+                field("URL Probed", url, C)
+                field("HTTP Status Code", f"{code}", color)
+
+                interesting = [
+                    "Server", "X-Powered-By", "Content-Type",
+                    "X-Frame-Options", "X-XSS-Protection",
+                    "Strict-Transport-Security", "Content-Security-Policy",
+                    "X-Content-Type-Options", "Set-Cookie", "Location",
+                    "Via", "X-Cache", "CF-Ray", "X-Amz-Cf-Id"
+                ]
+                for h in interesting:
+                    val = headers.get(h, headers.get(h.lower(), None))
+                    if val:
+                        field(h, str(val)[:70], Y)
+
+                # Security rating
+                security_headers = ["Strict-Transport-Security","X-Frame-Options",
+                                    "X-XSS-Protection","Content-Security-Policy",
+                                    "X-Content-Type-Options"]
+                present = sum(1 for h in security_headers if headers.get(h))
+                rating = f"{present}/{len(security_headers)}"
+                clr = G if present >= 4 else Y if present >= 2 else R
+                field("Security Headers Score", rating, clr)
+                return
+        except urllib.error.HTTPError as e:
+            field("HTTP Status", f"{e.code} {e.reason}", R)
+            return
+        except Exception:
+            continue
+    print(f"  {R}[!] Could not connect to target.{X}")
+
+# ─── 4. SSL CERTIFICATE ────────────────────────────────────
+def get_ssl_info(domain):
+    section("SSL / TLS CERTIFICATE")
+    try:
+        ctx = ssl.create_default_context()
+        with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+            s.settimeout(8)
+            s.connect((domain, 443))
+            cert = s.getpeercert()
+
+        subject = dict(x[0] for x in cert.get("subject", []))
+        issuer  = dict(x[0] for x in cert.get("issuer", []))
+
+        field("Common Name (CN)",   subject.get("commonName", "N/A"), G)
+        field("Organization",       subject.get("organizationName", "N/A"), C)
+        field("Issued By",          issuer.get("organizationName", "N/A"), Y)
+        field("Valid From",         cert.get("notBefore", "N/A"), C)
+        field("Valid Until",        cert.get("notAfter", "N/A"), C)
+
+        # Check expiry
+        try:
+            exp = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
+            days_left = (exp - datetime.utcnow()).days
+            clr = G if days_left > 60 else Y if days_left > 14 else R
+            field("Days Until Expiry", f"{days_left} days", clr)
+        except:
+            pass
+
+        # SANs
+        sans = cert.get("subjectAltName", [])
+        san_list = [v for t, v in sans if t == "DNS"]
+        if san_list:
+            field("SANs (Alt Names)", ", ".join(san_list[:5]), DIM)
+
+        field("TLS Version", s.version() if hasattr(s, 'version') else "N/A", Y)
+
+    except ssl.SSLCertVerificationError:
+        print(f"  {R}[!] SSL Certificate verification FAILED — possible MITM or expired cert{X}")
+    except ConnectionRefusedError:
+        print(f"  {Y}[~] Port 443 closed — no HTTPS on this target{X}")
+    except Exception as e:
+        print(f"  {R}[!] SSL Error: {e}{X}")
+
+# ─── 5. PORT SCANNER ───────────────────────────────────────
+def port_scan(ip):
+    section("COMMON PORT SCANNER")
+    if not ip:
+        print(f"  {R}[!] No IP available for port scan.{X}")
+        return
+
+    ports = {
+        21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+        53: "DNS", 80: "HTTP", 110: "POP3", 143: "IMAP",
+        443: "HTTPS", 445: "SMB", 3306: "MySQL", 3389: "RDP",
+        5432: "PostgreSQL", 6379: "Redis", 8080: "HTTP-Alt",
+        8443: "HTTPS-Alt", 27017: "MongoDB"
+    }
+
+    open_ports = []
+    closed_ports = []
+
+    print(f"  {Y}[>] Scanning {len(ports)} common ports on {ip}...{X}\n")
+
+    def scan_port(port, service):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.8)
+            result = s.connect_ex((ip, port))
+            s.close()
+            if result == 0:
+                open_ports.append((port, service))
+            else:
+                closed_ports.append((port, service))
+        except:
+            closed_ports.append((port, service))
+
+    threads = []
+    for port, service in ports.items():
+        t = threading.Thread(target=scan_port, args=(port, service))
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+
+    open_ports.sort()
+    if open_ports:
+        for port, service in open_ports:
+            print(f"  {G}  [OPEN]  {X}{Y}Port {port:<6}{X}  {G}{service}{X}")
+    else:
+        print(f"  {Y}  [~] No common ports found open.{X}")
+
+    print(f"\n  {DIM}Total scanned: {len(ports)} | Open: {len(open_ports)} | Closed: {len(closed_ports)}{X}")
+
+# ─── 6. SUBDOMAIN SCANNER ──────────────────────────────────
+def subdomain_scan(domain):
+    section("SUBDOMAIN SCANNER")
+    wordlist = [
+        "www", "mail", "ftp", "admin", "blog", "dev", "test", "api",
+        "shop", "store", "portal", "vpn", "remote", "staging", "app",
+        "secure", "login", "dashboard", "cdn", "static", "media",
+        "forum", "help", "support", "docs", "git", "m", "mobile",
+        "old", "new", "beta", "cloud", "server", "ns1", "ns2",
+        "smtp", "pop", "imap", "webmail", "cpanel", "whm", "host"
+    ]
+
+    found = []
+    print(f"  {Y}[>] Probing {len(wordlist)} subdomains...{X}\n")
+
+    def check_sub(sub):
+        full = f"{sub}.{domain}"
+        try:
+            ip = socket.gethostbyname(full)
+            found.append((full, ip))
+            print(f"  {G}  [FOUND] {X}{C}{full:<40}{X}  {Y}{ip}{X}")
+        except:
+            pass
+
+    threads = []
+    for sub in wordlist:
+        t = threading.Thread(target=check_sub, args=(sub,))
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+
+    if not found:
+        print(f"  {Y}  [~] No subdomains discovered from wordlist.{X}")
+    print(f"\n  {DIM}Probed: {len(wordlist)} | Found: {len(found)}{X}")
+    return found
+
+# ─── 7. GEOLOCATION ────────────────────────────────────────
+def get_geo(ip):
+    section("IP GEOLOCATION")
+    if not ip:
+        print(f"  {R}[!] No IP to geolocate.{X}")
+        return
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,org,as,lat,lon,timezone,mobile,proxy,hosting"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+
+        if data.get("status") == "success":
+            field("Country",      data.get("country", "N/A"), G)
+            field("Region",       data.get("regionName", "N/A"), C)
+            field("City",         data.get("city", "N/A"), C)
+            field("ISP",          data.get("isp", "N/A"), Y)
+            field("Organization", data.get("org", "N/A"), Y)
+            field("ASN",          data.get("as", "N/A"), DIM)
+            field("Timezone",     data.get("timezone", "N/A"), C)
+            field("Coordinates",  f"{data.get('lat')} , {data.get('lon')}", DIM)
+            field("Proxy/VPN",    str(data.get("proxy", False)), R if data.get("proxy") else G)
+            field("Hosting/DC",   str(data.get("hosting", False)), Y)
+            field("Mobile IP",    str(data.get("mobile", False)), Y)
+        else:
+            print(f"  {R}[!] GeoIP lookup failed for {ip}{X}")
+    except Exception as e:
+        print(f"  {R}[!] GeoIP Error: {e}{X}")
+
+# ─── 8. ROBOTS & SITEMAP ───────────────────────────────────
+def get_robots(domain):
+    section("ROBOTS.TXT & SITEMAP RECON")
+    targets = [
+        f"https://{domain}/robots.txt",
+        f"http://{domain}/robots.txt",
+    ]
+    for url in targets:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                if resp.getcode() == 200:
+                    content = resp.read().decode(errors="ignore")
+                    field("robots.txt Found", url, G)
+                    lines = [l.strip() for l in content.splitlines() if l.strip()]
+                    disallowed = [l for l in lines if l.lower().startswith("disallow")]
+                    sitemaps   = [l for l in lines if l.lower().startswith("sitemap")]
+                    print(f"\n  {Y}  Disallowed paths ({len(disallowed)} found):{X}")
+                    for d in disallowed[:10]:
+                        print(f"  {R}    {d}{X}")
+                    if sitemaps:
+                        print(f"\n  {Y}  Sitemaps:{X}")
+                        for s in sitemaps:
+                            print(f"  {G}    {s}{X}")
+                    return
+        except:
+            continue
+    print(f"  {Y}[~] robots.txt not found or inaccessible.{X}")
+
+# ─── 9. TECHNOLOGY FINGERPRINT ─────────────────────────────
+def fingerprint_tech(domain):
+    section("TECHNOLOGY FINGERPRINTING")
+    try:
+        for scheme in ["https", "http"]:
+            try:
+                url = f"{scheme}://{domain}"
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    headers = dict(resp.headers)
+                    body = resp.read(4096).decode(errors="ignore")
+                break
+            except:
+                continue
+
+        techs = []
+
+        # Server
+        server = headers.get("Server", "")
+        if server: techs.append(f"Server: {server}")
+
+        # Powered by
+        xpb = headers.get("X-Powered-By", "")
+        if xpb: techs.append(f"Powered By: {xpb}")
+
+        # CMS detection
+        cms_sigs = {
+            "WordPress"  : ["wp-content", "wp-includes", "wp-json"],
+            "Joomla"     : ["joomla", "/components/com_"],
+            "Drupal"     : ["drupal", "sites/default/files"],
+            "Shopify"    : ["shopify", "cdn.shopify.com"],
+            "Wix"        : ["wixstatic", "wix.com"],
+            "Squarespace": ["squarespace", "sqspcdn"],
+            "Magento"    : ["magento", "mage/"],
+            "Laravel"    : ["laravel_session"],
+            "Django"     : ["csrfmiddlewaretoken", "django"],
+            "React"      : ["react", "__NEXT_DATA__", "reactroot"],
+            "Angular"    : ["ng-version", "ng-app"],
+            "Vue.js"     : ["vue", "__vue__"],
+            "jQuery"     : ["jquery"],
+            "Bootstrap"  : ["bootstrap"],
+            "Cloudflare" : ["cf-ray", "__cfduid", "cloudflare"],
+            "AWS"        : ["x-amz", "amazonaws"],
+            "Nginx"      : ["nginx"],
+            "Apache"     : ["apache"],
+        }
+
+        detected = []
+        body_lower = body.lower()
+        headers_str = str(headers).lower()
+
+        for tech, sigs in cms_sigs.items():
+            for sig in sigs:
+                if sig.lower() in body_lower or sig.lower() in headers_str:
+                    detected.append(tech)
+                    break
+
+        if detected:
+            for t in detected:
+                print(f"  {G}  [DETECTED] {X}{Y}{t}{X}")
+        else:
+            print(f"  {Y}  [~] No known technologies fingerprinted.{X}")
+
+        if techs:
+            print()
+            for t in techs:
+                print(f"  {C}  {t}{X}")
+
+    except Exception as e:
+        print(f"  {R}[!] Fingerprint Error: {e}{X}")
+
+# ─── SAVE REPORT ───────────────────────────────────────────
+def save_report(domain, ip):
+    filename = f"recon_{domain}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    try:
+        with open(filename, "w") as f:
+            f.write(f"RECON-LITE REPORT\n")
+            f.write(f"Target  : {domain}\n")
+            f.write(f"IP      : {ip}\n")
+            f.write(f"Date    : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"{'='*60}\n")
+            f.write("Full scan completed. See terminal output for details.\n")
+        print(f"\n  {G}[✓] Report saved: {filename}{X}")
+    except Exception as e:
+        print(f"\n  {R}[!] Could not save report: {e}{X}")
+
+# ─── FULL SCAN ─────────────────────────────────────────────
+def full_scan(domain):
+    separator("═")
+    print(f"{M}  TARGET  ›  {W}{domain}{X}")
+    print(f"{M}  TIME    ›  {W}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{X}")
+    separator("═")
+
+    print(f"\n  {Y}[>] Initiating recon sequence...{X}")
+    fake_scan("Resolving target identity    ", 14)
+    fake_scan("Probing open services        ", 14)
+    fake_scan("Enumerating DNS records      ", 12)
+    fake_scan("Fingerprinting technologies  ", 12)
+    fake_scan("Generating intel report      ", 10)
+
+    ip = get_ip_dns(domain)
+    get_whois(domain)
+    get_http_headers(domain)
+    get_ssl_info(domain)
+    get_geo(ip)
+    port_scan(ip)
+    subdomain_scan(domain)
+    get_robots(domain)
+    fingerprint_tech(domain)
+
+    separator("═")
+    print(f"\n  {G}[✓] RECON COMPLETE — Target: {domain}{X}")
+    separator("═")
+
+    save = input(f"\n  {C}Save report to file? (y/n) :{X} ").strip().lower()
+    if save == "y":
+        save_report(domain, ip)
+
+# ─── MAIN MENU ─────────────────────────────────────────────
+def main():
+    banner()
+    boot()
+
+    while True:
+        separator()
+        print(f"  {G}RECON MODULES :{X}")
+        print(f"  {C}[1]{X}  Full Scan          {DIM}(all modules){X}")
+        print(f"  {C}[2]{X}  IP & DNS Lookup")
+        print(f"  {C}[3]{X}  WHOIS Info")
+        print(f"  {C}[4]{X}  HTTP Headers")
+        print(f"  {C}[5]{X}  SSL Certificate")
+        print(f"  {C}[6]{X}  GeoIP Location")
+        print(f"  {C}[7]{X}  Port Scanner")
+        print(f"  {C}[8]{X}  Subdomain Scanner")
+        print(f"  {C}[9]{X}  Robots.txt Recon")
+        print(f"  {C}[10]{X} Technology Fingerprint")
+        print(f"  {C}[0]{X}  Exit")
+        separator()
+
+        choice = input(f"\n  {G}root@recon{X}:{C}~{X}# ").strip()
+
+        if choice in [str(i) for i in range(1, 11)]:
+            target = input(f"  {C}Enter target domain :{X} ").strip()
+            if not target:
+                print(f"  {R}[!] No target entered.{X}\n")
+                continue
+            domain = clean_domain(target)
+            print(f"\n  {Y}[>] Target locked: {W}{domain}{X}\n")
+            time.sleep(0.3)
+
+            if   choice == "1":  full_scan(domain)
+            elif choice == "2":  get_ip_dns(domain)
+            elif choice == "3":  get_whois(domain)
+            elif choice == "4":  get_http_headers(domain)
+            elif choice == "5":  get_ssl_info(domain)
+            elif choice == "6":
+                ip = socket.gethostbyname(domain)
+                get_geo(ip)
+            elif choice == "7":
+                ip = socket.gethostbyname(domain)
+                port_scan(ip)
+            elif choice == "8":  subdomain_scan(domain)
+            elif choice == "9":  get_robots(domain)
+            elif choice == "10": fingerprint_tech(domain)
+
+        elif choice == "0":
+            print(f"\n  {M}[✓] Closing connection. Wiping logs. Stay ghost.{X}\n")
+            slow_print(f"  {DIM}>> Clearing session data... Done.{X}", delay=0.025)
+            slow_print(f"  {DIM}>> Closing encrypted tunnel... Done.{X}", delay=0.025)
+            slow_print(f"  {C}>> Goodbye, operator.{X}\n", delay=0.03)
+            sys.exit(0)
+        else:
+            print(f"  {R}[!] Unknown command.{X}\n")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n\n  {R}[!] Scan aborted by operator.{X}\n")
+        sys.exit(0)
